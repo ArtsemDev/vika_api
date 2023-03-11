@@ -1,24 +1,36 @@
 from fastapi import APIRouter, status, Query, HTTPException
+from slugify import slugify
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
+from core.models import Category
 from core.schemas import CategorySchema, CategoryDBSchema
 
-
 category_router = APIRouter(prefix='/category')
-categories = []
 
 
 @category_router.post('/', response_model=CategoryDBSchema, status_code=status.HTTP_201_CREATED)
 async def create_category(category: CategorySchema):
-    category_db = CategoryDBSchema(
-        **category.dict() | {'id': len(categories) + 1}
+    obj = Category(
+        name=category.name,
+        slug=slugify(category.name)
     )
-    categories.append(category_db)
-    return category_db
+    try:
+        await obj.save()
+    except IntegrityError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='category name is not unique')
+    else:
+        return CategoryDBSchema.from_orm(obj)
 
 
 @category_router.get('/', response_model=list[CategoryDBSchema])
 async def category_list():
-    return categories
+    return [
+        CategoryDBSchema.from_orm(obj)
+        for obj in await Category.scalars(
+            select(Category).order_by(Category.id.asc())
+        )
+    ]
 
 
 @category_router.get('/{category_id}', response_model=CategoryDBSchema)
@@ -29,11 +41,10 @@ async def get_category(
             description='Category unique ID'
         )
 ):
-    obj = [*filter(lambda x: x.id == category_id, categories)]
+    obj = await Category.get(category_id)
     if obj:
-        return obj[0]
-    else:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='category not found')
+        return CategoryDBSchema.from_orm(obj)
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='category not found')
 
 
 @category_router.delete('/{category_id}')
@@ -44,17 +55,22 @@ async def delete_category(
             description='Category unique ID'
         )
 ):
-    for i, category in enumerate(categories):
-        if category.id == category_id:
-            del categories[i]
-            raise HTTPException(status_code=status.HTTP_202_ACCEPTED, detail='Category delete successfully')
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Category not found')
+    obj = await Category.get(category_id)
+    if obj:
+        await obj.delete()
+        raise HTTPException(status_code=status.HTTP_202_ACCEPTED, detail='category delete successfully')
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='category not found')
 
 
-@category_router.put('/{category_id}', response_model=CategoryDBSchema, status_code=status.HTTP_202_ACCEPTED)
-async def edit_category(category: CategoryDBSchema):
-    for i, obj in enumerate(categories):
-        if obj.id == category.id:
-            categories[i] = category
+@category_router.put('/', response_model=CategoryDBSchema, status_code=status.HTTP_202_ACCEPTED)
+async def update_category(category: CategoryDBSchema):
+    obj = await Category.get(category.id)
+    if obj:
+        obj.from_pydantic(schema=category)
+        try:
+            await obj.save()
+        except IntegrityError:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='category name is not unique')
+        else:
             return category
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='category not found')

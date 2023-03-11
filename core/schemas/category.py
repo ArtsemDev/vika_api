@@ -30,3 +30,6 @@ class CategoryDBSchema(CategorySchema):
         if not values.get('slug'):
             values['slug'] = slugify(values.get('name'))
         return values
+
+    class Config:
+        orm_mode = True
